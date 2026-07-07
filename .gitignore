@@ -1,0 +1,18 @@
+# Секреты — токен бота и пароль
+config.py
+
+# Список авторизованных пользователей (персональные ID)
+authorized.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Служебное
+*.log
+.DS_Store
+Thumbs.db
