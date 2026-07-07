@@ -195,8 +195,12 @@ def show_menu(chat_id=None, user_id=None):
     send_message(MSG_CHOOSE, chat_id=chat_id, user_id=user_id, with_keyboard=True)
 
 
-def handle_button(payload, channel_id, reply_chat_id, reply_user_id, callback_id):
-    """Публикует сообщение в канал по нажатой кнопке и подтверждает публикацию."""
+def handle_button(payload, channel_id, reply_user_id, callback_id):
+    """Публикует сообщение в канал по нажатой кнопке и подтверждает публикацию.
+
+    Все ответы оператору идут строго в личку по user_id — в канал уходит
+    ТОЛЬКО сам текст оповещения (chat_id канала), больше ничего.
+    """
     # Если канал ещё не определён — пробуем найти его сейчас
     if not channel_id:
         channel_id = resolve_channel_id()
@@ -205,87 +209,95 @@ def handle_button(payload, channel_id, reply_chat_id, reply_user_id, callback_id
         send_message(
             "Бот не добавлен администратором в канал " + CHANNEL_LINK +
             ". Публикация невозможна. Добавьте бота админом в канал.",
-            chat_id=reply_chat_id, user_id=reply_user_id, with_keyboard=True,
+            user_id=reply_user_id, with_keyboard=True,
         )
         return
 
     text = TEXT_ALERT if payload == "alert" else TEXT_CANCEL
-    print(f"Кнопка '{payload}': публикую в канал {channel_id}, "
-          f"ответ в чат={reply_chat_id} / user={reply_user_id}")
+    print(f"Кнопка '{payload}': публикую в канал {channel_id}, ответ user={reply_user_id}")
     try:
         send_message(text, chat_id=channel_id)
-    except Exception as e:  # публикация не удалась — сообщаем об ошибке
+    except Exception as e:  # публикация не удалась — сообщаем об ошибке в личку
         answer_callback(callback_id)
-        send_message(
-            "Ошибка публикации: "  # Ошибка публикации:
-            + str(e),
-            chat_id=reply_chat_id, user_id=reply_user_id, with_keyboard=True,
-        )
+        send_message("Ошибка публикации: " + str(e),
+                     user_id=reply_user_id, with_keyboard=True)
         return
 
-    # Успех: пишем подтверждение БЕЗ кнопок, затем сразу новое
-    # «Выберите действие» С кнопками. Ответ на callback — в конце (не критичен).
-    send_message(
-        MSG_PUBLISHED, chat_id=reply_chat_id, user_id=reply_user_id, with_keyboard=False
-    )
-    send_message(
-        MSG_CHOOSE, chat_id=reply_chat_id, user_id=reply_user_id, with_keyboard=True
-    )
+    # Успех: подтверждение БЕЗ кнопок, затем новое «Выберите действие» С кнопками — в личку
+    send_message(MSG_PUBLISHED, user_id=reply_user_id, with_keyboard=False)
+    send_message(MSG_CHOOSE, user_id=reply_user_id, with_keyboard=True)
     answer_callback(callback_id)
+
+
+def _is_private_dialog(recipient):
+    """True только для личного диалога 1-на-1.
+
+    Каналы и группы отсекаются: у диалогов chat_id положительный,
+    у каналов/групп — отрицательный; также явно исключаем тип channel/chat.
+    Это защищает от ответа «Введите пароль» прямо в канал на чужой пост.
+    """
+    ct = recipient.get("chat_type")
+    if ct in ("channel", "chat"):
+        return False
+    cid = recipient.get("chat_id")
+    return isinstance(cid, int) and cid > 0
 
 
 def handle_update(update, channel_id):
     utype = update.get("update_type")
 
-    # Пользователь открыл бота (нажал /start)
+    # Пользователь открыл бота (нажал /start) — всегда личный диалог
     if utype == "bot_started":
         uid = update.get("user_id") or update.get("user", {}).get("user_id")
-        chat_id = update.get("chat_id")
+        if not uid:
+            return
         if uid in authorized_users:
-            show_menu(chat_id=chat_id, user_id=uid)
+            show_menu(user_id=uid)
         else:
-            send_message(MSG_ENTER_PASSWORD, chat_id=chat_id, user_id=uid)
+            send_message(MSG_ENTER_PASSWORD, user_id=uid)
 
     # Пользователь написал боту
     elif utype == "message_created":
         msg = update.get("message", {})
+        recipient = msg.get("recipient", {})
         sender_id = msg.get("sender", {}).get("user_id")
-        chat_id = msg.get("recipient", {}).get("chat_id")
+
+        # ВАЖНО: реагируем ТОЛЬКО на личные сообщения боту.
+        # Посты в каналах и сообщения в группах игнорируем полностью,
+        # иначе бот ответит «Введите пароль» прямо в канал.
+        if not sender_id or not _is_private_dialog(recipient):
+            return
+
         text = (msg.get("body", {}).get("text") or "").strip()
 
         if sender_id in authorized_users:
-            # Уже авторизован — сразу показываем меню
-            show_menu(chat_id=chat_id, user_id=sender_id)
+            show_menu(user_id=sender_id)
         elif text == PASSWORD:
-            # Верный пароль — запоминаем и открываем доступ
             authorized_users.add(sender_id)
             save_authorized(authorized_users)
             print(f"Пользователь {sender_id} авторизован")
-            show_menu(chat_id=chat_id, user_id=sender_id)
+            show_menu(user_id=sender_id)
         elif text in ("/start", ""):
-            # Первый заход или пустое сообщение — просим пароль
-            send_message(MSG_ENTER_PASSWORD, chat_id=chat_id, user_id=sender_id)
+            send_message(MSG_ENTER_PASSWORD, user_id=sender_id)
         else:
-            # Любой другой текст без авторизации — неверный пароль
-            send_message(MSG_WRONG_PASSWORD, chat_id=chat_id, user_id=sender_id)
+            send_message(MSG_WRONG_PASSWORD, user_id=sender_id)
 
     # Нажата кнопка
     elif utype == "message_callback":
         cb = update.get("callback", {})
-        msg = update.get("message", {})
-        reply_chat_id = msg.get("recipient", {}).get("chat_id")
         reply_user_id = cb.get("user", {}).get("user_id")
+        if not reply_user_id:
+            return
 
-        # Кнопки доступны только авторизованным
+        # Кнопки доступны только авторизованным; ответ — строго в личку
         if reply_user_id not in authorized_users:
             answer_callback(cb.get("callback_id"))
-            send_message(MSG_ENTER_PASSWORD, chat_id=reply_chat_id, user_id=reply_user_id)
+            send_message(MSG_ENTER_PASSWORD, user_id=reply_user_id)
             return
 
         handle_button(
             payload=cb.get("payload"),
             channel_id=channel_id,
-            reply_chat_id=reply_chat_id,
             reply_user_id=reply_user_id,
             callback_id=cb.get("callback_id"),
         )
