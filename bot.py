@@ -35,10 +35,10 @@ except ImportError:
     )
 
 # Ссылка на канал, в который публикуем. chat_id определяется автоматически по ней.
-CHANNEL_LINK = "https://max.ru/id504602122857_biz3"
+# ВАЖНО: бот должен быть добавлен АДМИНИСТРАТОРОМ в этот канал.
+CHANNEL_LINK = "https://max.ru/Shapsha_VV"
 
-# Если авто-определение канала не сработает — можно вписать chat_id вручную
-# (сейчас у этого канала он равен -76645920217134).
+# Если авто-определение канала не сработает — можно вписать chat_id вручную.
 CHANNEL_CHAT_ID = None
 
 # Базовый адрес MAX Bot API
@@ -141,20 +141,29 @@ def answer_callback(callback_id, notification=None):
         print("answer_callback не удался (не критично):", e)
 
 
+def _link_key(link):
+    """Последний сегмент ссылки в нижнем регистре (для устойчивого сравнения)."""
+    return (link or "").rstrip("/").split("/")[-1].lower()
+
+
 def resolve_channel_id():
-    """Находит chat_id канала по ссылке среди чатов, где состоит бот."""
+    """Ищет chat_id канала по ссылке среди чатов бота.
+
+    Возвращает chat_id или None, если бот ещё не добавлен в канал.
+    Не выбрасывает исключение — чтобы бот не падал до добавления в канал.
+    """
     if CHANNEL_CHAT_ID is not None:
         return CHANNEL_CHAT_ID
-    data = api_get("/chats", count=100)
+    try:
+        data = api_get("/chats", count=100)
+    except Exception as e:
+        print("Не удалось получить список чатов:", e)
+        return None
+    target = _link_key(CHANNEL_LINK)
     for chat in data.get("chats", []):
-        if chat.get("link") == CHANNEL_LINK:
+        if _link_key(chat.get("link")) == target:
             return chat["chat_id"]
-    raise RuntimeError(
-        "Канал не найден. "
-        "Добавьте бота админом "
-        "в канал или впишите "
-        "CHANNEL_CHAT_ID вручную."
-    )
+    return None
 
 
 # ─────────────────────────── АВТОРИЗАЦИЯ ───────────────────────────
@@ -188,6 +197,18 @@ def show_menu(chat_id=None, user_id=None):
 
 def handle_button(payload, channel_id, reply_chat_id, reply_user_id, callback_id):
     """Публикует сообщение в канал по нажатой кнопке и подтверждает публикацию."""
+    # Если канал ещё не определён — пробуем найти его сейчас
+    if not channel_id:
+        channel_id = resolve_channel_id()
+    if not channel_id:
+        answer_callback(callback_id)
+        send_message(
+            "Бот не добавлен администратором в канал " + CHANNEL_LINK +
+            ". Публикация невозможна. Добавьте бота админом в канал.",
+            chat_id=reply_chat_id, user_id=reply_user_id, with_keyboard=True,
+        )
+        return
+
     text = TEXT_ALERT if payload == "alert" else TEXT_CANCEL
     print(f"Кнопка '{payload}': публикую в канал {channel_id}, "
           f"ответ в чат={reply_chat_id} / user={reply_user_id}")
@@ -274,11 +295,21 @@ def main():
     me = api_get("/me")
     print("Бот запущен:", me.get("name"), "@" + me.get("username", ""))
     channel_id = resolve_channel_id()
-    print("Канал:", channel_id)
+    if channel_id:
+        print("Канал:", channel_id)
+    else:
+        print("ВНИМАНИЕ: канал", CHANNEL_LINK,
+              "не найден. Добавьте бота АДМИНИСТРАТОРОМ в канал —",
+              "он определится автоматически, деплой не нужен.")
 
     marker = None
     while True:
         try:
+            # Пока канал не определён — пробуем найти его перед каждым опросом
+            if channel_id is None:
+                channel_id = resolve_channel_id()
+                if channel_id:
+                    print("Канал определён:", channel_id)
             params = {"timeout": 90}
             if marker is not None:
                 params["marker"] = marker
