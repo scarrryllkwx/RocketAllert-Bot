@@ -36,7 +36,7 @@ except ImportError:
 
 # Ссылка на канал, в который публикуем. chat_id определяется автоматически по ней.
 # ВАЖНО: бот должен быть добавлен АДМИНИСТРАТОРОМ в этот канал.
-CHANNEL_LINK = "https://max.ru/Shapsha_VV"
+CHANNEL_LINK = "https://max.ru/id504602122857_biz3"
 
 # Если авто-определение канала не сработает — можно вписать chat_id вручную.
 CHANNEL_CHAT_ID = None
